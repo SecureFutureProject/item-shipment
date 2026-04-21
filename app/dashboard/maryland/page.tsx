@@ -176,7 +176,6 @@ export default function MarylandDashboard() {
       padding: '40px 24px',
     }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@600;700&display=swap');
         * { box-sizing: border-box; }
       `}</style>
 

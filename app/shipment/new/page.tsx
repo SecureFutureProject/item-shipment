@@ -172,15 +172,16 @@ export default function NewShipmentPage() {
             padding: '40px 24px',
         }}>
             <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@600;700&display=swap');
         * { box-sizing: border-box; }
-        .upload-zone {
-          border: 1.5px dashed #333;
-          border-radius: 8px;
-          padding: 48px;
-          text-align: center;
-          cursor: pointer;
-          transition: border-color 0.2s, background 0.2s;
+        table { width: 100%; border-collapse: collapse; }
+        th {
+          text-align: left;
+          padding: 10px 16px;
+          font-size: 11px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #888;
+          border-bottom: 1px solid #222;
         }
         .upload-zone:hover {
           border-color: #c8a96e;
