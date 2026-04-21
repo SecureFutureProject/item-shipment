@@ -138,7 +138,7 @@ export default function MarylandDashboard() {
                   borderRadius: 6,
                   fontSize: 12,
                   cursor: 'pointer',
-                  fontFamily: 'DM Mono, monospace',
+                  fontFamily: 'var(--font-dm-mono), monospace',
                 }}
               >
                 Open →
@@ -154,7 +154,7 @@ export default function MarylandDashboard() {
                   borderRadius: 6,
                   fontSize: 12,
                   cursor: 'pointer',
-                  fontFamily: 'DM Mono, monospace',
+                  fontFamily: 'var(--font-dm-mono), monospace',
                   opacity: cancelling === s.id ? 0.5 : 1,
                 }}
               >
@@ -172,7 +172,7 @@ export default function MarylandDashboard() {
       minHeight: '100vh',
       backgroundColor: '#0f1117',
       color: '#e8e8e8',
-      fontFamily: "'DM Mono', monospace",
+      fontFamily: 'var(--font-dm-mono), monospace',
       padding: '40px 24px',
     }}>
       <style>{`
@@ -184,7 +184,7 @@ export default function MarylandDashboard() {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 40 }}>
           <div>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
+            <h1 style={{ fontFamily: 'var(--font-syne), sans-serif', fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
               Maryland
             </h1>
             <p style={{ color: '#555', fontSize: 13, marginTop: 6 }}>
@@ -199,7 +199,7 @@ export default function MarylandDashboard() {
                 color: '#0f1117',
                 border: 'none',
                 padding: '12px 24px',
-                fontFamily: "'Syne', sans-serif",
+                fontFamily: 'var(--font-syne), sans-serif',
                 fontWeight: 700,
                 fontSize: 14,
                 borderRadius: 6,
@@ -215,7 +215,7 @@ export default function MarylandDashboard() {
                 color: '#555',
                 border: '1px solid #222',
                 padding: '12px 20px',
-                fontFamily: 'DM Mono, monospace',
+                fontFamily: 'var(--font-dm-mono), monospace',
                 fontSize: 13,
                 borderRadius: 6,
                 cursor: 'pointer',

@@ -168,7 +168,7 @@ export default function NewShipmentPage() {
             minHeight: '100vh',
             backgroundColor: '#0f1117',
             color: '#e8e8e8',
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: 'var(--font-dm-mono), monospace',
             padding: '40px 24px',
         }}>
             <style>{`
@@ -249,11 +249,11 @@ export default function NewShipmentPage() {
                 <div style={{ marginBottom: 40 }}>
                     <button
                         onClick={() => router.push('/dashboard/maryland')}
-                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 13, padding: 0, marginBottom: 24, fontFamily: 'DM Mono, monospace' }}
+                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 13, padding: 0, marginBottom: 24, fontFamily: 'var(--font-dm-mono), monospace' }}
                     >
                         ← Back to dashboard
                     </button>
-                    <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
+                    <h1 style={{ fontFamily: 'var(--font-syne), sans-serif', fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
                         New Shipment
                     </h1>
                     <p style={{ color: '#666', fontSize: 13, marginTop: 8 }}>
@@ -271,7 +271,7 @@ export default function NewShipmentPage() {
                         onClick={() => fileInputRef.current?.click()}
                     >
                         <div style={{ fontSize: 32, marginBottom: 12 }}>📂</div>
-                        <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 600, fontSize: 16, color: '#fff', marginBottom: 8 }}>
+                        <div style={{ fontFamily: 'var(--font-syne), sans-serif', fontWeight: 600, fontSize: 16, color: '#fff', marginBottom: 8 }}>
                             Click to select Excel file
                         </div>
                         <div style={{ fontSize: 12, color: '#555' }}>
@@ -292,7 +292,7 @@ export default function NewShipmentPage() {
                     <>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                             <div>
-                                <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 600, fontSize: 16, color: '#fff' }}>
+                                <div style={{ fontFamily: 'var(--font-syne), sans-serif', fontWeight: 600, fontSize: 16, color: '#fff' }}>
                                     {fileName}
                                 </div>
                                 <div style={{ fontSize: 12, color: '#c8a96e', marginTop: 4 }}>

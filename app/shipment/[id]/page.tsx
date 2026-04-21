@@ -75,7 +75,7 @@ export default function ShipmentPage() {
             minHeight: '100vh',
             backgroundColor: '#0f1117',
             color: '#e8e8e8',
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: 'var(--font-dm-mono), monospace',
             padding: '40px 24px',
         }}>
             <style>{`
@@ -105,7 +105,7 @@ export default function ShipmentPage() {
                 {/* Back button */}
                 <button
                     onClick={() => router.push('/dashboard/maryland')}
-                    style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 13, padding: 0, marginBottom: 24, fontFamily: 'DM Mono, monospace' }}
+                    style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 13, padding: 0, marginBottom: 24, fontFamily: 'var(--font-dm-mono), monospace' }}
                 >
                     ← Back to dashboard
                 </button>
@@ -123,7 +123,7 @@ export default function ShipmentPage() {
                         {/* Header */}
                         <div style={{ marginBottom: 32 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                                <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
+                                <h1 style={{ fontFamily: 'var(--font-syne), sans-serif', fontSize: 28, fontWeight: 700, margin: 0, color: '#fff' }}>
                                     Shipment Manifest
                                 </h1>
                                 <span style={{
