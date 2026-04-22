@@ -24,7 +24,7 @@ interface ScanLog {
 interface RunningTotal {
     item_number: string
     description: string | null
-    expected: number | null   // null = unknown item
+    expected: number | null
     scanned: number
     isOnManifest: boolean
 }
@@ -53,10 +53,14 @@ interface ConfirmCard {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function classifyScan(raw: string): 'partNumber' | 'quantity' {
+function classifyScan(raw: string, manifestItems: ManifestItem[]): 'partNumber' | 'quantity' {
     const trimmed = raw.trim()
+    // If it matches a manifest item number exactly → always a part number
+    if (manifestItems.some(m => m.item_number === trimmed)) return 'partNumber'
+    // If it's a pure positive integer → treat as quantity
     const n = Number(trimmed)
-    if (Number.isInteger(n) && n > 0 && n < 500) return 'quantity'
+    if (Number.isInteger(n) && n > 0) return 'quantity'
+    // Anything else (alphanumeric like EP-00001419) → part number
     return 'partNumber'
 }
 
@@ -77,7 +81,6 @@ function sortTotals(totals: RunningTotal[]): RunningTotal[] {
 function buildRunningTotals(manifestItems: ManifestItem[], scanLogs: ScanLog[]): RunningTotal[] {
     const totalsMap = new Map<string, RunningTotal>()
 
-    // seed with manifest
     for (const item of manifestItems) {
         totalsMap.set(item.item_number, {
             item_number: item.item_number,
@@ -88,32 +91,25 @@ function buildRunningTotals(manifestItems: ManifestItem[], scanLogs: ScanLog[]):
         })
     }
 
-    // accumulate scans
     for (const log of scanLogs) {
         const existing = totalsMap.get(log.item_number)
         if (existing) {
             existing.scanned += log.quantity
         } else {
-            // unknown item
-            const unknown = totalsMap.get(log.item_number)
-            if (unknown) {
-                unknown.scanned += log.quantity
-            } else {
-                totalsMap.set(log.item_number, {
-                    item_number: log.item_number,
-                    description: null,
-                    expected: null,
-                    scanned: log.quantity,
-                    isOnManifest: false,
-                })
-            }
+            totalsMap.set(log.item_number, {
+                item_number: log.item_number,
+                description: null,
+                expected: null,
+                scanned: log.quantity,
+                isOnManifest: false,
+            })
         }
     }
 
     return sortTotals(Array.from(totalsMap.values()))
 }
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
+// ─── Status Badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: ReturnType<typeof getStatus> }) {
     const map = {
@@ -149,26 +145,24 @@ export default function ShipmentScanPage() {
     const shipmentId = params.id as string
     const supabase = createClient()
 
-    // data
     const [manifestItems, setManifestItems] = useState<ManifestItem[]>([])
     const [scanLogs, setScanLogs] = useState<ScanLog[]>([])
     const [shipmentDate, setShipmentDate] = useState<string>('')
     const [loading, setLoading] = useState(true)
     const [userRole, setUserRole] = useState<string>('maryland')
 
-    // scan state
     const [scanState, setScanState] = useState<ScanState>({ phase: 'idle' })
     const [statusDisplay, setStatusDisplay] = useState<StatusDisplay>({ kind: 'waiting' })
     const [confirmCard, setConfirmCard] = useState<ConfirmCard | null>(null)
     const [lastEntry, setLastEntry] = useState<{ itemNumber: string; quantity: number; logId: string } | null>(null)
 
-    // refs
     const inputRef = useRef<HTMLInputElement>(null)
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const scanStateRef = useRef<ScanState>({ phase: 'idle' })
+    const manifestItemsRef = useRef<ManifestItem[]>([])
 
-    // keep ref in sync
     useEffect(() => { scanStateRef.current = scanState }, [scanState])
+    useEffect(() => { manifestItemsRef.current = manifestItems }, [manifestItems])
 
     // ── Load data ──────────────────────────────────────────────────────────────
 
@@ -235,7 +229,7 @@ export default function ShipmentScanPage() {
         return () => document.removeEventListener('click', handleClick)
     }, [focusInput])
 
-    // ── Scan processing ────────────────────────────────────────────────────────
+    // ── Core logic ─────────────────────────────────────────────────────────────
 
     const triggerError = useCallback(() => {
         setScanState({ phase: 'idle' })
@@ -244,7 +238,7 @@ export default function ShipmentScanPage() {
     }, [])
 
     const logPair = useCallback(async (partNumber: string, quantity: number) => {
-        const manifestItem = manifestItems.find(m => m.item_number === partNumber)
+        const manifestItem = manifestItemsRef.current.find(m => m.item_number === partNumber)
 
         const { data: inserted, error } = await supabase
             .from('scan_logs')
@@ -264,7 +258,6 @@ export default function ShipmentScanPage() {
 
         setScanLogs(prev => {
             const next = [...prev, inserted]
-            // calc running total for this item
             const total = next
                 .filter(l => l.item_number === partNumber)
                 .reduce((sum, l) => sum + l.quantity, 0)
@@ -285,13 +278,23 @@ export default function ShipmentScanPage() {
         setScanState({ phase: 'idle' })
         setStatusDisplay({ kind: 'waiting' })
 
-        // auto-clear confirm card after 5s
         if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
         confirmTimerRef.current = setTimeout(() => {
             setConfirmCard(null)
             focusInput()
         }, 5000)
-    }, [manifestItems, shipmentId, userRole, supabase, triggerError, focusInput])
+    }, [shipmentId, userRole, supabase, triggerError, focusInput])
+
+    // ── Smart high-quantity check ──────────────────────────────────────────────
+    // Only hard-cancel if the big number is actually a known part number on the manifest.
+    // If it's just a large number not on the manifest (e.g. real qty of 1000), ask to confirm.
+
+    const handleHighQuantity = useCallback((partNumber: string, qty: number) => {
+        setScanState({ phase: 'highQtyWarning', partNumber, quantity: qty })
+        setStatusDisplay({ kind: 'highQty', quantity: qty })
+    }, [])
+
+    // ── Scan handler ───────────────────────────────────────────────────────────
 
     const handleScan = useCallback(async (raw: string) => {
         const trimmed = raw.trim()
@@ -299,22 +302,18 @@ export default function ShipmentScanPage() {
 
         const current = scanStateRef.current
 
-        // ── high qty confirm mode ──
-        if (current.phase === 'highQtyWarning') {
-            // user typed something — ignore, handled by buttons
-            return
-        }
+        // In high-qty warning mode, scanner input is ignored — user must press a button
+        if (current.phase === 'highQtyWarning') return
 
-        const type = classifyScan(trimmed)
+        const type = classifyScan(trimmed, manifestItemsRef.current)
 
         if (current.phase === 'idle') {
             if (type === 'partNumber') {
-                const onManifest = manifestItems.some(m => m.item_number === trimmed)
-                const description = manifestItems.find(m => m.item_number === trimmed)?.description ?? null
+                const onManifest = manifestItemsRef.current.some(m => m.item_number === trimmed)
+                const description = manifestItemsRef.current.find(m => m.item_number === trimmed)?.description ?? null
                 setScanState({ phase: 'hasPart', partNumber: trimmed })
                 setStatusDisplay({ kind: 'hasPart', partNumber: trimmed, onManifest, description })
             } else {
-                // got a quantity first
                 setScanState({ phase: 'hasQty', quantity: Number(trimmed) })
                 setStatusDisplay({ kind: 'hasQty', quantity: Number(trimmed) })
             }
@@ -323,15 +322,13 @@ export default function ShipmentScanPage() {
 
         if (current.phase === 'hasPart') {
             if (type === 'partNumber') {
-                // two part numbers in a row → error
+                // Two part numbers in a row → error
                 triggerError()
                 return
             }
-            // got quantity
             const qty = Number(trimmed)
             if (qty >= 500) {
-                setScanState({ phase: 'highQtyWarning', partNumber: current.partNumber, quantity: qty })
-                setStatusDisplay({ kind: 'highQty', quantity: qty })
+                handleHighQuantity(current.partNumber, qty)
                 return
             }
             await logPair(current.partNumber, qty)
@@ -340,21 +337,19 @@ export default function ShipmentScanPage() {
 
         if (current.phase === 'hasQty') {
             if (type === 'quantity') {
-                // two quantities in a row → error
+                // Two quantities in a row → error
                 triggerError()
                 return
             }
-            // got part number — pair assembled (qty came first)
             const qty = current.quantity
             if (qty >= 500) {
-                setScanState({ phase: 'highQtyWarning', partNumber: trimmed, quantity: qty })
-                setStatusDisplay({ kind: 'highQty', quantity: qty })
+                handleHighQuantity(trimmed, qty)
                 return
             }
             await logPair(trimmed, qty)
             return
         }
-    }, [manifestItems, logPair, triggerError])
+    }, [logPair, triggerError, handleHighQuantity])
 
     const onInputKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') {
@@ -382,6 +377,7 @@ export default function ShipmentScanPage() {
 
     const undoLast = useCallback(async () => {
         if (!lastEntry) return
+
         const { error } = await supabase
             .from('scan_logs')
             .delete()
@@ -418,7 +414,7 @@ export default function ShipmentScanPage() {
         notStarted: knownItems.filter(t => getStatus(t) === 'notStarted'),
     }
 
-    // ── Status display text ───────────────────────────────────────────────────
+    // ── Render helpers ─────────────────────────────────────────────────────────
 
     function renderStatusDisplay() {
         switch (statusDisplay.kind) {
@@ -464,7 +460,7 @@ export default function ShipmentScanPage() {
                 return (
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>
                         <div style={{ color: '#fbbf24', marginBottom: '10px' }}>
-                            ⚠ QUANTITY {statusDisplay.quantity} SEEMS HIGH — IS THIS CORRECT?
+                            ⚠ QUANTITY {statusDisplay.quantity} — IS THIS A QUANTITY OR A WRONG SCAN?
                         </div>
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button onClick={confirmHighQty} style={{
@@ -487,11 +483,9 @@ export default function ShipmentScanPage() {
         }
     }
 
-    // ── Confirm card ──────────────────────────────────────────────────────────
-
     function renderConfirmCard() {
         if (!confirmCard) return null
-        const { itemNumber, description, quantityScanned, runningTotal, expected, logId } = confirmCard
+        const { itemNumber, description, quantityScanned, runningTotal, expected } = confirmCard
         const isComplete = expected !== null && runningTotal === expected
         const isOver = expected !== null && runningTotal > expected
         const overBy = isOver ? runningTotal - (expected ?? 0) : 0
@@ -547,25 +541,18 @@ export default function ShipmentScanPage() {
         )
     }
 
-    // ── Table row ─────────────────────────────────────────────────────────────
-
     function TotalsRow({ total }: { total: RunningTotal }) {
         const status = getStatus(total)
         const isHighlighted = statusDisplay.kind === 'hasPart' && statusDisplay.partNumber === total.item_number
 
-        const rowBg = isHighlighted
-            ? '#1a1500'
+        const rowBg = isHighlighted ? '#1a1500'
             : status === 'complete' ? '#0a1a0f'
                 : status === 'over' ? '#1a0a0a'
                     : status === 'inProgress' ? '#151000'
                         : 'transparent'
 
         return (
-            <tr style={{
-                background: rowBg,
-                transition: 'background 0.3s ease',
-                borderBottom: '1px solid #1a1a1a',
-            }}>
+            <tr style={{ background: rowBg, transition: 'background 0.3s ease', borderBottom: '1px solid #1a1a1a' }}>
                 <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#ccc' }}>
                     {total.item_number}
                 </td>
@@ -604,7 +591,7 @@ export default function ShipmentScanPage() {
         )
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────
+    // ── Loading ────────────────────────────────────────────────────────────────
 
     if (loading) {
         return (
@@ -622,13 +609,10 @@ export default function ShipmentScanPage() {
     const totalItems = manifestItems.length
     const completedItems = grouped.complete.length
 
+    // ── Render ─────────────────────────────────────────────────────────────────
+
     return (
-        <div style={{
-            minHeight: '100vh',
-            background: '#050505',
-            color: '#e0e0e0',
-            fontFamily: 'var(--font-sans)',
-        }}>
+        <div style={{ minHeight: '100vh', background: '#050505', color: '#e0e0e0', fontFamily: 'var(--font-sans)' }}>
             <style>{`
         @keyframes slideIn {
           from { opacity: 0; transform: translateY(-6px); }
@@ -640,16 +624,14 @@ export default function ShipmentScanPage() {
         ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
       `}</style>
 
-            {/* Hidden scanner input — always in DOM, always focused */}
+            {/* Hidden scanner input — always focused */}
             <input
                 ref={inputRef}
                 onKeyDown={onInputKeyDown}
                 style={{
-                    position: 'fixed',
-                    top: 0, left: 0,
+                    position: 'fixed', top: 0, left: 0,
                     width: '1px', height: '1px',
-                    opacity: 0,
-                    pointerEvents: 'none',
+                    opacity: 0, pointerEvents: 'none',
                 }}
                 autoFocus
                 autoComplete="off"
@@ -705,11 +687,8 @@ export default function ShipmentScanPage() {
                     marginBottom: '12px',
                 }}>
                     <div style={{
-                        fontSize: '10px',
-                        fontFamily: 'var(--font-mono)',
-                        letterSpacing: '0.12em',
-                        color: '#333',
-                        marginBottom: '12px',
+                        fontSize: '10px', fontFamily: 'var(--font-mono)',
+                        letterSpacing: '0.12em', color: '#333', marginBottom: '12px',
                     }}>
                         SCAN AREA
                     </div>
@@ -725,7 +704,7 @@ export default function ShipmentScanPage() {
                     </div>
                 )}
 
-                {/* Undo last entry */}
+                {/* Undo bar */}
                 <div style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -761,23 +740,15 @@ export default function ShipmentScanPage() {
                     </button>
                 </div>
 
-                {/* Running totals table */}
+                {/* Running totals */}
                 <div style={{
-                    fontSize: '10px',
-                    fontFamily: 'var(--font-mono)',
-                    letterSpacing: '0.12em',
-                    color: '#333',
-                    marginBottom: '10px',
+                    fontSize: '10px', fontFamily: 'var(--font-mono)',
+                    letterSpacing: '0.12em', color: '#333', marginBottom: '10px',
                 }}>
                     RUNNING TOTALS
                 </div>
 
-                <div style={{
-                    background: '#080808',
-                    border: '1px solid #111',
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                }}>
+                <div style={{ background: '#080808', border: '1px solid #111', borderRadius: '8px', overflow: 'hidden' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ borderBottom: '1px solid #1a1a1a' }}>
@@ -797,39 +768,30 @@ export default function ShipmentScanPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {/* Unknown items */}
                             {unknownItems.length > 0 && (
                                 <>
                                     <SectionHeader label="NOT ON MANIFEST" color="#ff6b6b" count={unknownItems.length} />
                                     {unknownItems.map(t => <TotalsRow key={t.item_number} total={t} />)}
                                 </>
                             )}
-
-                            {/* Over */}
                             {grouped.over.length > 0 && (
                                 <>
                                     <SectionHeader label="OVER-SCANNED" color="#ff6b6b" count={grouped.over.length} />
                                     {grouped.over.map(t => <TotalsRow key={t.item_number} total={t} />)}
                                 </>
                             )}
-
-                            {/* In progress */}
                             {grouped.inProgress.length > 0 && (
                                 <>
                                     <SectionHeader label="IN PROGRESS" color="#fbbf24" count={grouped.inProgress.length} />
                                     {grouped.inProgress.map(t => <TotalsRow key={t.item_number} total={t} />)}
                                 </>
                             )}
-
-                            {/* Complete */}
                             {grouped.complete.length > 0 && (
                                 <>
                                     <SectionHeader label="COMPLETE" color="#4ade80" count={grouped.complete.length} />
                                     {grouped.complete.map(t => <TotalsRow key={t.item_number} total={t} />)}
                                 </>
                             )}
-
-                            {/* Not started */}
                             {grouped.notStarted.length > 0 && (
                                 <>
                                     <SectionHeader label="NOT STARTED" color="#444" count={grouped.notStarted.length} />
