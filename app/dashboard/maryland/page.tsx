@@ -55,6 +55,7 @@ function ShipmentCard({
   s, cancelling, savingNote, savedNote,
   noteValue, onNoteChange, onSaveNote, onCancel, onOpen,
 }: ShipmentCardProps) {
+  const router = useRouter()
   const canEditNote = s.status === 'submitted' && isWithin12Hours(s.submitted_at)
   const showNote = s.status === 'submitted' || s.status === 'received'
 
