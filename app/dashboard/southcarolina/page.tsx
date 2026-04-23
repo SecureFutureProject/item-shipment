@@ -28,9 +28,10 @@ function statusColor(status: string) {
 interface ShipmentCardProps {
   s: Shipment
   onOpen: (id: string) => void
+  onReport: (id: string) => void
 }
 
-function ShipmentCard({ s, onOpen }: ShipmentCardProps) {
+function ShipmentCard({ s, onOpen, onReport }: ShipmentCardProps) {
   return (
     <div style={{
       border: '1px solid #222',
@@ -64,40 +65,58 @@ function ShipmentCard({ s, onOpen }: ShipmentCardProps) {
         </div>
       </div>
 
-      <div style={{ flexShrink: 0 }}>
+      <div style={{ flexShrink: 0, display: 'flex', gap: 8 }}>
         {s.status === 'submitted' && (
-          <button
-            onClick={() => onOpen(s.id)}
-            style={{
-              background: 'transparent',
-              border: '1px solid #333',
-              color: '#6ec8a9',
-              padding: '8px 16px',
-              borderRadius: 6,
-              fontSize: 12,
-              cursor: 'pointer',
-              fontFamily: 'var(--font-dm-mono), monospace',
-            }}
-          >
-            Receive →
-          </button>
+          <>
+            <button
+              onClick={() => onOpen(s.id)}
+              style={{
+                background: 'transparent', border: '1px solid #333',
+                color: '#6ec8a9', padding: '8px 16px', borderRadius: 6,
+                fontSize: 12, cursor: 'pointer',
+                fontFamily: 'var(--font-dm-mono), monospace',
+              }}
+            >
+              Receive →
+            </button>
+            <button
+              onClick={() => onReport(s.id)}
+              style={{
+                background: 'transparent', border: '1px solid #1a2a3a',
+                color: '#60a5fa', padding: '8px 16px', borderRadius: 6,
+                fontSize: 12, cursor: 'pointer',
+                fontFamily: 'var(--font-dm-mono), monospace',
+              }}
+            >
+              Report →
+            </button>
+          </>
         )}
         {s.status === 'received' && (
-          <button
-            onClick={() => onOpen(s.id)}
-            style={{
-              background: 'transparent',
-              border: '1px solid #222',
-              color: '#444',
-              padding: '8px 16px',
-              borderRadius: 6,
-              fontSize: 12,
-              cursor: 'pointer',
-              fontFamily: 'var(--font-dm-mono), monospace',
-            }}
-          >
-            View →
-          </button>
+          <>
+            <button
+              onClick={() => onOpen(s.id)}
+              style={{
+                background: 'transparent', border: '1px solid #222',
+                color: '#444', padding: '8px 16px', borderRadius: 6,
+                fontSize: 12, cursor: 'pointer',
+                fontFamily: 'var(--font-dm-mono), monospace',
+              }}
+            >
+              View →
+            </button>
+            <button
+              onClick={() => onReport(s.id)}
+              style={{
+                background: 'transparent', border: '1px solid #1a2a3a',
+                color: '#60a5fa', padding: '8px 16px', borderRadius: 6,
+                fontSize: 12, cursor: 'pointer',
+                fontFamily: 'var(--font-dm-mono), monospace',
+              }}
+            >
+              Report →
+            </button>
+          </>
         )}
       </div>
     </div>
@@ -203,6 +222,7 @@ export default function SouthCarolinaDashboard() {
                   {incoming.map(s => (
                     <ShipmentCard key={s.id} s={s}
                       onOpen={id => router.push(`/shipment/${id}`)}
+                      onReport={id => router.push(`/shipment/${id}/report`)}
                     />
                   ))}
                 </div>
@@ -219,6 +239,7 @@ export default function SouthCarolinaDashboard() {
                   {received.map(s => (
                     <ShipmentCard key={s.id} s={s}
                       onOpen={id => router.push(`/shipment/${id}`)}
+                      onReport={id => router.push(`/shipment/${id}/report`)}
                     />
                   ))}
                 </div>

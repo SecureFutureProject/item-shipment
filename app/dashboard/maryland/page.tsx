@@ -133,17 +133,56 @@ function ShipmentCard({
             </>
           )}
           {s.status === 'submitted' && (
-            <button
-              onClick={() => onOpen(s.id)}
-              style={{
-                background: 'transparent', border: '1px solid #333',
-                color: '#6ec8a9', padding: '8px 16px', borderRadius: 6,
-                fontSize: 12, cursor: 'pointer',
-                fontFamily: 'var(--font-dm-mono), monospace',
-              }}
-            >
-              View →
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => onOpen(s.id)}
+                style={{
+                  background: 'transparent', border: '1px solid #333',
+                  color: '#6ec8a9', padding: '8px 16px', borderRadius: 6,
+                  fontSize: 12, cursor: 'pointer',
+                  fontFamily: 'var(--font-dm-mono), monospace',
+                }}
+              >
+                View →
+              </button>
+              <button
+                onClick={() => router.push(`/shipment/${s.id}/report`)}
+                style={{
+                  background: 'transparent', border: '1px solid #1a2a3a',
+                  color: '#60a5fa', padding: '8px 16px', borderRadius: 6,
+                  fontSize: 12, cursor: 'pointer',
+                  fontFamily: 'var(--font-dm-mono), monospace',
+                }}
+              >
+                Report →
+              </button>
+            </div>
+          )}
+          {s.status === 'received' && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => onOpen(s.id)}
+                style={{
+                  background: 'transparent', border: '1px solid #222',
+                  color: '#444', padding: '8px 16px', borderRadius: 6,
+                  fontSize: 12, cursor: 'pointer',
+                  fontFamily: 'var(--font-dm-mono), monospace',
+                }}
+              >
+                View →
+              </button>
+              <button
+                onClick={() => router.push(`/shipment/${s.id}/report`)}
+                style={{
+                  background: 'transparent', border: '1px solid #1a2a3a',
+                  color: '#60a5fa', padding: '8px 16px', borderRadius: 6,
+                  fontSize: 12, cursor: 'pointer',
+                  fontFamily: 'var(--font-dm-mono), monospace',
+                }}
+              >
+                Report →
+              </button>
+            </div>
           )}
         </div>
       </div>
