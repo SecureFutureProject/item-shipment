@@ -55,12 +55,10 @@ interface ConfirmCard {
 
 function classifyScan(raw: string, manifestItems: ManifestItem[]): 'partNumber' | 'quantity' {
     const trimmed = raw.trim()
-    // If it matches a manifest item number exactly → always a part number
     if (manifestItems.some(m => m.item_number === trimmed)) return 'partNumber'
-    // If it's a pure positive integer → treat as quantity
     const n = Number(trimmed)
+    if (Number.isInteger(n) && n > 0 && trimmed.length >= 5) return 'partNumber'
     if (Number.isInteger(n) && n > 0) return 'quantity'
-    // Anything else (alphanumeric like EP-00001419) → part number
     return 'partNumber'
 }
 
@@ -148,6 +146,8 @@ export default function ShipmentScanPage() {
     const [manifestItems, setManifestItems] = useState<ManifestItem[]>([])
     const [scanLogs, setScanLogs] = useState<ScanLog[]>([])
     const [shipmentDate, setShipmentDate] = useState<string>('')
+    const [shipmentStatus, setShipmentStatus] = useState<string>('active')
+    const [shipmentNotes, setShipmentNotes] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
     const [userRole, setUserRole] = useState<string>('maryland')
 
@@ -156,6 +156,9 @@ export default function ShipmentScanPage() {
     const [confirmCard, setConfirmCard] = useState<ConfirmCard | null>(null)
     const [lastEntry, setLastEntry] = useState<{ itemNumber: string; quantity: number; logId: string } | null>(null)
 
+    const [showSubmitModal, setShowSubmitModal] = useState(false)
+    const [isSubmitting, setIsSubmitting] = useState(false)
+
     const inputRef = useRef<HTMLInputElement>(null)
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const scanStateRef = useRef<ScanState>({ phase: 'idle' })
@@ -163,6 +166,15 @@ export default function ShipmentScanPage() {
 
     useEffect(() => { scanStateRef.current = scanState }, [scanState])
     useEffect(() => { manifestItemsRef.current = manifestItems }, [manifestItems])
+
+    useEffect(() => {
+        if (showSubmitModal) {
+            document.body.style.overflow = 'hidden'
+        } else {
+            document.body.style.overflow = ''
+        }
+        return () => { document.body.style.overflow = '' }
+    }, [showSubmitModal])
 
     // ── Load data ──────────────────────────────────────────────────────────────
 
@@ -180,13 +192,15 @@ export default function ShipmentScanPage() {
 
             const { data: shipment } = await supabase
                 .from('shipments')
-                .select('created_at, status')
+                .select('created_at, status, notes')
                 .eq('id', shipmentId)
                 .single()
             if (shipment) {
                 setShipmentDate(new Date(shipment.created_at).toLocaleDateString('en-US', {
                     month: 'short', day: 'numeric', year: 'numeric'
                 }))
+                setShipmentStatus(shipment.status)
+                setShipmentNotes(shipment.notes ?? null)
             }
 
             const { data: items } = await supabase
@@ -202,8 +216,10 @@ export default function ShipmentScanPage() {
                 .order('scanned_at', { ascending: true })
             if (logs) {
                 setScanLogs(logs)
-                if (logs.length > 0) {
-                    const last = logs[logs.length - 1]
+                // Set last entry to the last scan by THIS role
+                const myLogs = logs.filter(l => l.scanned_by === (roleData?.role ?? 'maryland'))
+                if (myLogs.length > 0) {
+                    const last = myLogs[myLogs.length - 1]
                     setLastEntry({ itemNumber: last.item_number, quantity: last.quantity, logId: last.id })
                 }
             }
@@ -258,8 +274,9 @@ export default function ShipmentScanPage() {
 
         setScanLogs(prev => {
             const next = [...prev, inserted]
+            // Running total counts only this role's scans
             const total = next
-                .filter(l => l.item_number === partNumber)
+                .filter(l => l.item_number === partNumber && l.scanned_by === userRole)
                 .reduce((sum, l) => sum + l.quantity, 0)
 
             setConfirmCard({
@@ -285,9 +302,7 @@ export default function ShipmentScanPage() {
         }, 5000)
     }, [shipmentId, userRole, supabase, triggerError, focusInput])
 
-    // ── Smart high-quantity check ──────────────────────────────────────────────
-    // Only hard-cancel if the big number is actually a known part number on the manifest.
-    // If it's just a large number not on the manifest (e.g. real qty of 1000), ask to confirm.
+    // ── High qty handling ──────────────────────────────────────────────────────
 
     const handleHighQuantity = useCallback((partNumber: string, qty: number) => {
         setScanState({ phase: 'highQtyWarning', partNumber, quantity: qty })
@@ -301,8 +316,6 @@ export default function ShipmentScanPage() {
         if (!trimmed) return
 
         const current = scanStateRef.current
-
-        // In high-qty warning mode, scanner input is ignored — user must press a button
         if (current.phase === 'highQtyWarning') return
 
         const type = classifyScan(trimmed, manifestItemsRef.current)
@@ -321,31 +334,17 @@ export default function ShipmentScanPage() {
         }
 
         if (current.phase === 'hasPart') {
-            if (type === 'partNumber') {
-                // Two part numbers in a row → error
-                triggerError()
-                return
-            }
+            if (type === 'partNumber') { triggerError(); return }
             const qty = Number(trimmed)
-            if (qty >= 500) {
-                handleHighQuantity(current.partNumber, qty)
-                return
-            }
+            if (qty >= 500) { handleHighQuantity(current.partNumber, qty); return }
             await logPair(current.partNumber, qty)
             return
         }
 
         if (current.phase === 'hasQty') {
-            if (type === 'quantity') {
-                // Two quantities in a row → error
-                triggerError()
-                return
-            }
+            if (type === 'quantity') { triggerError(); return }
             const qty = current.quantity
-            if (qty >= 500) {
-                handleHighQuantity(trimmed, qty)
-                return
-            }
+            if (qty >= 500) { handleHighQuantity(trimmed, qty); return }
             await logPair(trimmed, qty)
             return
         }
@@ -387,8 +386,9 @@ export default function ShipmentScanPage() {
 
         setScanLogs(prev => {
             const next = prev.filter(l => l.id !== lastEntry.logId)
-            if (next.length > 0) {
-                const newLast = next[next.length - 1]
+            const myLogs = next.filter(l => l.scanned_by === userRole)
+            if (myLogs.length > 0) {
+                const newLast = myLogs[myLogs.length - 1]
                 setLastEntry({ itemNumber: newLast.item_number, quantity: newLast.quantity, logId: newLast.id })
             } else {
                 setLastEntry(null)
@@ -399,11 +399,39 @@ export default function ShipmentScanPage() {
         setConfirmCard(null)
         if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
         focusInput()
-    }, [lastEntry, supabase, focusInput])
+    }, [lastEntry, userRole, supabase, focusInput])
+
+    // ── Submit / Confirm Receipt ───────────────────────────────────────────────
+
+    const handleSubmit = useCallback(async () => {
+        setIsSubmitting(true)
+        const isSC = userRole === 'southcarolina'
+        const newStatus = isSC ? 'received' : 'submitted'
+        const updatePayload = isSC
+            ? { status: newStatus }
+            : { status: newStatus, submitted_at: new Date().toISOString() }
+
+        const { error } = await supabase
+            .from('shipments')
+            .update(updatePayload)
+            .eq('id', shipmentId)
+
+        if (error) {
+            setIsSubmitting(false)
+            return
+        }
+
+        const dashboardPath = isSC ? '/dashboard/southcarolina' : '/dashboard/maryland'
+        router.push(dashboardPath)
+    }, [shipmentId, userRole, supabase, router])
 
     // ── Derived data ───────────────────────────────────────────────────────────
 
-    const runningTotals = buildRunningTotals(manifestItems, scanLogs)
+    const isSC = userRole === 'southcarolina'
+
+    // SC sees only their own scans in running totals; MD sees their own
+    const myLogs = scanLogs.filter(l => l.scanned_by === userRole)
+    const runningTotals = buildRunningTotals(manifestItems, myLogs)
     const unknownItems = runningTotals.filter(t => !t.isOnManifest)
     const knownItems = runningTotals.filter(t => t.isOnManifest)
 
@@ -413,6 +441,13 @@ export default function ShipmentScanPage() {
         complete: knownItems.filter(t => getStatus(t) === 'complete'),
         notStarted: knownItems.filter(t => getStatus(t) === 'notStarted'),
     }
+
+    const unscannedItems = knownItems.filter(t => t.scanned === 0)
+
+    // MD can scan when active; SC can scan when submitted
+    const isReadOnly = isSC
+        ? shipmentStatus !== 'submitted'
+        : shipmentStatus !== 'active'
 
     // ── Render helpers ─────────────────────────────────────────────────────────
 
@@ -591,6 +626,185 @@ export default function ShipmentScanPage() {
         )
     }
 
+    // ── Submit / Confirm Receipt modal ─────────────────────────────────────────
+
+    function renderSubmitModal() {
+        if (!showSubmitModal) return null
+        const modalTitle = isSC ? 'CONFIRM RECEIPT' : 'SUBMIT SHIPMENT'
+        const confirmLabel = isSC ? 'CONFIRM RECEIPT' : 'CONFIRM SUBMIT'
+        const confirmingLabel = isSC ? 'CONFIRMING...' : 'SUBMITTING...'
+
+        return (
+            <div style={{
+                position: 'fixed', inset: 0, background: '#000000cc',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                zIndex: 100, overflowY: 'auto',
+            }}
+                onClick={(e) => { if (e.target === e.currentTarget) { setShowSubmitModal(false); focusInput() } }}
+            >
+                <div style={{
+                    background: '#0f0f0f', border: '1px solid #222',
+                    borderRadius: '10px', padding: '28px 32px',
+                    width: '480px', maxWidth: '90vw',
+                }}>
+                    <div style={{
+                        fontFamily: 'var(--font-mono)', fontSize: '13px',
+                        letterSpacing: '0.08em', color: '#fff', marginBottom: '20px',
+                    }}>
+                        {modalTitle}
+                    </div>
+
+                    {/* Not scanned */}
+                    {unscannedItems.length > 0 && (
+                        <div style={{
+                            background: '#1a1400', border: '1px solid #fbbf2430',
+                            borderRadius: '6px', padding: '14px 16px', marginBottom: '12px',
+                        }}>
+                            <div style={{
+                                fontFamily: 'var(--font-mono)', fontSize: '10px',
+                                letterSpacing: '0.1em', color: '#fbbf24', marginBottom: '10px',
+                            }}>
+                                ⚠ {unscannedItems.length} ITEMS NOT SCANNED
+                            </div>
+                            {unscannedItems.map(item => (
+                                <div key={item.item_number} style={{
+                                    fontFamily: 'var(--font-mono)', fontSize: '11px',
+                                    color: '#666', padding: '2px 0',
+                                }}>
+                                    {item.item_number}
+                                    {item.description && <span style={{ color: '#444', marginLeft: '10px' }}>{item.description}</span>}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Over-scanned */}
+                    {grouped.over.length > 0 && (
+                        <div style={{
+                            background: '#1a0a0a', border: '1px solid #ff6b6b30',
+                            borderRadius: '6px', padding: '14px 16px', marginBottom: '12px',
+                        }}>
+                            <div style={{
+                                fontFamily: 'var(--font-mono)', fontSize: '10px',
+                                letterSpacing: '0.1em', color: '#ff6b6b', marginBottom: '10px',
+                            }}>
+                                ✕ {grouped.over.length} ITEMS OVER-SCANNED
+                            </div>
+                            {grouped.over.map(item => (
+                                <div key={item.item_number} style={{
+                                    fontFamily: 'var(--font-mono)', fontSize: '11px',
+                                    color: '#666', padding: '2px 0',
+                                }}>
+                                    {item.item_number}
+                                    {item.description && <span style={{ color: '#444', marginLeft: '10px' }}>{item.description}</span>}
+                                    <span style={{ color: '#ff6b6b', marginLeft: '10px' }}>scanned {item.scanned}, expected {item.expected}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* In progress */}
+                    {grouped.inProgress.length > 0 && (
+                        <div style={{
+                            background: '#1a1400', border: '1px solid #fbbf2430',
+                            borderRadius: '6px', padding: '14px 16px', marginBottom: '12px',
+                        }}>
+                            <div style={{
+                                fontFamily: 'var(--font-mono)', fontSize: '10px',
+                                letterSpacing: '0.1em', color: '#fbbf24', marginBottom: '10px',
+                            }}>
+                                ⚠ {grouped.inProgress.length} ITEMS PARTIALLY SCANNED
+                            </div>
+                            {grouped.inProgress.map(item => (
+                                <div key={item.item_number} style={{
+                                    fontFamily: 'var(--font-mono)', fontSize: '11px',
+                                    color: '#666', padding: '2px 0',
+                                }}>
+                                    {item.item_number}
+                                    {item.description && <span style={{ color: '#444', marginLeft: '10px' }}>{item.description}</span>}
+                                    <span style={{ color: '#fbbf24', marginLeft: '10px' }}>{item.scanned} of {item.expected}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Not on manifest */}
+                    {unknownItems.length > 0 && (
+                        <div style={{
+                            background: '#1a0a0a', border: '1px solid #ff6b6b30',
+                            borderRadius: '6px', padding: '14px 16px', marginBottom: '12px',
+                        }}>
+                            <div style={{
+                                fontFamily: 'var(--font-mono)', fontSize: '10px',
+                                letterSpacing: '0.1em', color: '#ff6b6b', marginBottom: '10px',
+                            }}>
+                                ✕ {unknownItems.length} ITEMS NOT ON MANIFEST
+                            </div>
+                            {unknownItems.map(item => (
+                                <div key={item.item_number} style={{
+                                    fontFamily: 'var(--font-mono)', fontSize: '11px',
+                                    color: '#666', padding: '2px 0',
+                                }}>
+                                    {item.item_number}
+                                    <span style={{ color: '#444', marginLeft: '10px' }}>qty: {item.scanned}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* All clear */}
+                    {unscannedItems.length === 0 && unknownItems.length === 0 && grouped.over.length === 0 && grouped.inProgress.length === 0 && (
+                        <div style={{
+                            background: '#0a1a0f', border: '1px solid #4ade8030',
+                            borderRadius: '6px', padding: '14px 16px', marginBottom: '12px',
+                            fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#4ade80',
+                        }}>
+                            ✓ ALL MANIFEST ITEMS SCANNED — NO ISSUES FOUND
+                        </div>
+                    )}
+
+                    <div style={{
+                        fontFamily: 'var(--font-mono)', fontSize: '10px',
+                        color: '#444', marginBottom: '20px', lineHeight: 1.6,
+                    }}>
+                        WARNINGS ARE NON-BLOCKING. YOU MAY {isSC ? 'CONFIRM RECEIPT' : 'SUBMIT'} WITH OPEN ITEMS.
+                        THIS ACTION CANNOT BE UNDONE.
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                        <button
+                            onClick={() => { setShowSubmitModal(false); focusInput() }}
+                            disabled={isSubmitting}
+                            style={{
+                                background: 'transparent', border: '1px solid #222',
+                                color: '#555', padding: '8px 20px', borderRadius: '5px',
+                                cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                                fontSize: '11px', letterSpacing: '0.05em',
+                            }}
+                        >
+                            CANCEL
+                        </button>
+                        <button
+                            onClick={handleSubmit}
+                            disabled={isSubmitting}
+                            style={{
+                                background: isSubmitting ? '#111' : '#0f2d1a',
+                                border: '1px solid #4ade8050',
+                                color: isSubmitting ? '#333' : '#4ade80',
+                                padding: '8px 20px', borderRadius: '5px',
+                                cursor: isSubmitting ? 'default' : 'pointer',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '11px', letterSpacing: '0.05em',
+                            }}
+                        >
+                            {isSubmitting ? confirmingLabel : confirmLabel}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     // ── Loading ────────────────────────────────────────────────────────────────
 
     if (loading) {
@@ -605,9 +819,10 @@ export default function ShipmentScanPage() {
         )
     }
 
-    const scannedCount = scanLogs.length
+    const myScannedCount = myLogs.length
     const totalItems = manifestItems.length
     const completedItems = grouped.complete.length
+    const dashboardPath = isSC ? '/dashboard/southcarolina' : '/dashboard/maryland'
 
     // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -624,35 +839,32 @@ export default function ShipmentScanPage() {
         ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
       `}</style>
 
-            {/* Hidden scanner input — always focused */}
-            <input
-                ref={inputRef}
-                onKeyDown={onInputKeyDown}
-                style={{
-                    position: 'fixed', top: 0, left: 0,
-                    width: '1px', height: '1px',
-                    opacity: 0, pointerEvents: 'none',
-                }}
-                autoFocus
-                autoComplete="off"
-                tabIndex={-1}
-            />
+            {!isReadOnly && (
+                <input
+                    ref={inputRef}
+                    onKeyDown={onInputKeyDown}
+                    style={{
+                        position: 'fixed', top: 0, left: 0,
+                        width: '1px', height: '1px',
+                        opacity: 0, pointerEvents: 'none',
+                    }}
+                    autoFocus
+                    autoComplete="off"
+                    tabIndex={-1}
+                />
+            )}
+
+            {renderSubmitModal()}
 
             {/* Header */}
             <div style={{
-                borderBottom: '1px solid #111',
-                padding: '16px 24px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                background: '#080808',
-                position: 'sticky',
-                top: 0,
-                zIndex: 10,
+                borderBottom: '1px solid #111', padding: '16px 24px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: '#080808', position: 'sticky', top: 0, zIndex: 10,
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                     <button
-                        onClick={() => router.push('/dashboard/maryland')}
+                        onClick={() => router.push(dashboardPath)}
                         style={{
                             background: 'none', border: 'none', color: '#555',
                             cursor: 'pointer', fontFamily: 'var(--font-mono)',
@@ -671,81 +883,123 @@ export default function ShipmentScanPage() {
                         {completedItems}/{totalItems} ITEMS COMPLETE
                     </span>
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#333' }}>
-                        {scannedCount} SCANS LOGGED
+                        {myScannedCount} SCANS LOGGED
                     </span>
+                    {!isReadOnly && (
+                        <button
+                            onClick={() => setShowSubmitModal(true)}
+                            style={{
+                                background: '#0f2d1a', border: '1px solid #4ade8050',
+                                color: '#4ade80', padding: '7px 18px', borderRadius: '5px',
+                                cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                                fontSize: '11px', letterSpacing: '0.06em',
+                            }}
+                        >
+                            {isSC ? 'CONFIRM RECEIPT' : 'SUBMIT SHIPMENT'}
+                        </button>
+                    )}
                 </div>
             </div>
 
             <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px 24px 80px' }}>
 
-                {/* Scan area */}
-                <div style={{
-                    background: '#0a0a0a',
-                    border: '1px solid #1a1a1a',
-                    borderRadius: '8px',
-                    padding: '20px 24px',
-                    marginBottom: '12px',
-                }}>
+                {/* MD note banner — shown to SC when a note exists */}
+                {isSC && shipmentNotes && (
                     <div style={{
-                        fontSize: '10px', fontFamily: 'var(--font-mono)',
-                        letterSpacing: '0.12em', color: '#333', marginBottom: '12px',
+                        background: '#12100a',
+                        border: '1px solid #fbbf2430',
+                        borderRadius: '8px',
+                        padding: '14px 20px',
+                        marginBottom: '16px',
                     }}>
-                        SCAN AREA
-                    </div>
-                    <div style={{ minHeight: '52px', display: 'flex', alignItems: 'center' }}>
-                        {renderStatusDisplay()}
-                    </div>
-                </div>
-
-                {/* Confirm card */}
-                {confirmCard && (
-                    <div style={{ marginBottom: '12px', animation: 'slideIn 0.2s ease' }}>
-                        {renderConfirmCard()}
+                        <div style={{
+                            fontFamily: 'var(--font-mono)', fontSize: '10px',
+                            letterSpacing: '0.1em', color: '#fbbf24', marginBottom: '6px',
+                        }}>
+                            ⚠ NOTE FROM MARYLAND
+                        </div>
+                        <div style={{
+                            fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#888', lineHeight: 1.6,
+                        }}>
+                            {shipmentNotes}
+                        </div>
                     </div>
                 )}
 
-                {/* Undo bar */}
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: '24px',
-                    padding: '10px 16px',
-                    background: '#080808',
-                    border: '1px solid #111',
-                    borderRadius: '6px',
-                }}>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#444' }}>
-                        {lastEntry
-                            ? <>LAST SCAN: <span style={{ color: '#666' }}>{lastEntry.itemNumber}</span> × <span style={{ color: '#666' }}>{lastEntry.quantity}</span></>
-                            : 'NO SCANS YET'
-                        }
+                {/* Read-only banner */}
+                {isReadOnly && (
+                    <div style={{
+                        background: '#0f0f0f', border: '1px solid #222', borderRadius: '8px',
+                        padding: '16px 20px', marginBottom: '24px',
+                        fontFamily: 'var(--font-mono)', fontSize: '12px',
+                        color: '#555', letterSpacing: '0.05em', textAlign: 'center',
+                    }}>
+                        {shipmentStatus === 'submitted' && !isSC && 'SHIPMENT SUBMITTED — AWAITING SOUTH CAROLINA RECEIPT'}
+                        {shipmentStatus === 'received' && '✓ SHIPMENT RECEIVED — CLOSED'}
+                        {shipmentStatus === 'cancelled' && 'SHIPMENT CANCELLED'}
+                        {shipmentStatus === 'active' && isSC && 'SHIPMENT NOT YET SUBMITTED BY MARYLAND'}
                     </div>
-                    <button
-                        onClick={undoLast}
-                        disabled={!lastEntry}
-                        style={{
-                            background: lastEntry ? '#1a1a1a' : 'transparent',
-                            border: `1px solid ${lastEntry ? '#2a2a2a' : '#111'}`,
-                            color: lastEntry ? '#888' : '#2a2a2a',
-                            padding: '5px 14px',
-                            borderRadius: '4px',
-                            cursor: lastEntry ? 'pointer' : 'default',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            letterSpacing: '0.08em',
-                        }}
-                    >
-                        UNDO LAST ENTRY
-                    </button>
-                </div>
+                )}
+
+                {/* Scan area */}
+                {!isReadOnly && (
+                    <>
+                        <div style={{
+                            background: '#0a0a0a', border: '1px solid #1a1a1a',
+                            borderRadius: '8px', padding: '20px 24px', marginBottom: '12px',
+                        }}>
+                            <div style={{
+                                fontSize: '10px', fontFamily: 'var(--font-mono)',
+                                letterSpacing: '0.12em', color: '#333', marginBottom: '12px',
+                            }}>
+                                SCAN AREA
+                            </div>
+                            <div style={{ minHeight: '52px', display: 'flex', alignItems: 'center' }}>
+                                {renderStatusDisplay()}
+                            </div>
+                        </div>
+
+                        {confirmCard && (
+                            <div style={{ marginBottom: '12px', animation: 'slideIn 0.2s ease' }}>
+                                {renderConfirmCard()}
+                            </div>
+                        )}
+
+                        <div style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            marginBottom: '24px', padding: '10px 16px',
+                            background: '#080808', border: '1px solid #111', borderRadius: '6px',
+                        }}>
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#444' }}>
+                                {lastEntry
+                                    ? <>LAST SCAN: <span style={{ color: '#666' }}>{lastEntry.itemNumber}</span> × <span style={{ color: '#666' }}>{lastEntry.quantity}</span></>
+                                    : 'NO SCANS YET'
+                                }
+                            </div>
+                            <button
+                                onClick={undoLast}
+                                disabled={!lastEntry}
+                                style={{
+                                    background: lastEntry ? '#1a1a1a' : 'transparent',
+                                    border: `1px solid ${lastEntry ? '#2a2a2a' : '#111'}`,
+                                    color: lastEntry ? '#888' : '#2a2a2a',
+                                    padding: '5px 14px', borderRadius: '4px',
+                                    cursor: lastEntry ? 'pointer' : 'default',
+                                    fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.08em',
+                                }}
+                            >
+                                UNDO LAST ENTRY
+                            </button>
+                        </div>
+                    </>
+                )}
 
                 {/* Running totals */}
                 <div style={{
                     fontSize: '10px', fontFamily: 'var(--font-mono)',
                     letterSpacing: '0.12em', color: '#333', marginBottom: '10px',
                 }}>
-                    RUNNING TOTALS
+                    RUNNING TOTALS {isSC && '(YOUR SCANS)'}
                 </div>
 
                 <div style={{ background: '#080808', border: '1px solid #111', borderRadius: '8px', overflow: 'hidden' }}>
@@ -755,11 +1009,8 @@ export default function ShipmentScanPage() {
                                 {['ITEM NO.', 'DESCRIPTION', 'EXPECTED', 'SCANNED', 'STATUS'].map((h, i) => (
                                     <th key={h} style={{
                                         padding: '10px 12px',
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize: '10px',
-                                        letterSpacing: '0.08em',
-                                        color: '#333',
-                                        fontWeight: 400,
+                                        fontFamily: 'var(--font-mono)', fontSize: '10px',
+                                        letterSpacing: '0.08em', color: '#333', fontWeight: 400,
                                         textAlign: i >= 2 && i <= 3 ? 'right' : 'left',
                                     }}>
                                         {h}
