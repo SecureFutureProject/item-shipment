@@ -17,6 +17,7 @@ interface ScanLog {
   quantity: number
   scanned_by: string
   scanned_at: string
+  box_number: number | null
 }
 
 interface RunningTotal {
@@ -35,7 +36,7 @@ type ScanState =
 
 type StatusDisplay =
   | { kind: 'waiting' }
-  | { kind: 'hasPart'; partNumber: string; onManifest: boolean; description: string | null }
+  | { kind: 'hasPart'; partNumber: string; onManifest: boolean; description: string | null; locations: string[] }
   | { kind: 'hasQty'; quantity: number }
   | { kind: 'error' }
   | { kind: 'highQty'; quantity: number }
@@ -47,6 +48,7 @@ interface ConfirmCard {
   runningTotal: number
   expected: number | null
   logId: string
+  locations: string[]
 }
 
 function classifyScan(raw: string, manifestItems: ManifestItem[]): 'partNumber' | 'quantity' {
@@ -87,9 +89,9 @@ function buildRunningTotals(manifestItems: ManifestItem[], scanLogs: ScanLog[]):
 
 function StatusBadge({ status }: { status: ReturnType<typeof getStatus> }) {
   const map = {
-    unknown:    { label: 'UNKNOWN',     color: '#B81A1A', bg: '#FEF2F2', border: '#FECACA' },
-    over:       { label: 'OVER',        color: '#B81A1A', bg: '#FEF2F2', border: '#FECACA' },
-    complete:   { label: 'COMPLETE',    color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
+    unknown: { label: 'UNKNOWN', color: '#B81A1A', bg: '#FEF2F2', border: '#FECACA' },
+    over: { label: 'OVER', color: '#B81A1A', bg: '#FEF2F2', border: '#FECACA' },
+    complete: { label: 'COMPLETE', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
     inProgress: { label: 'IN PROGRESS', color: '#92661A', bg: '#FEF3C7', border: '#FDE68A' },
     notStarted: { label: 'NOT STARTED', color: '#A0A0A0', bg: '#F5F5F3', border: '#E2E2DC' },
   }
@@ -122,6 +124,11 @@ export default function ShipmentScanPage() {
   const [lastEntry, setLastEntry] = useState<{ itemNumber: string; quantity: number; logId: string } | null>(null)
   const [showSubmitModal, setShowSubmitModal] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [currentBox, setCurrentBox] = useState(1)
+  const [printBox, setPrintBox] = useState<number | null>(null)
+  const currentBoxRef = useRef(1)
+  const locationsRef = useRef<Map<string, string[]>>(new Map())
+  const [locationsCount, setLocationsCount] = useState(0)
 
   const inputRef = useRef<HTMLInputElement>(null)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -137,11 +144,36 @@ export default function ShipmentScanPage() {
   }, [showSubmitModal])
 
   useEffect(() => {
+    async function loadLocations(site: string) {
+      const map = new Map<string, string[]>()
+      const pageSize = 1000
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from('part_locations')
+          .select('item_number, location')
+          .eq('site', site)
+          .order('item_number')
+          .order('location')
+          .range(from, from + pageSize - 1)
+        if (error || !data) break
+        for (const r of data) {
+          const list = map.get(r.item_number)
+          if (list) list.push(r.location)
+          else map.set(r.item_number, [r.location])
+        }
+        if (data.length < pageSize) break
+      }
+      locationsRef.current = map
+      setLocationsCount(map.size)
+      console.log(`Loaded bins for ${map.size} parts`)
+    }
+
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/'); return }
       const { data: roleData } = await supabase.from('user_roles').select('role').eq('email', user.email).single()
       if (roleData) setUserRole(roleData.role)
+      loadLocations(roleData?.role ?? 'maryland')
       const { data: shipment } = await supabase.from('shipments').select('created_at, status, notes').eq('id', shipmentId).single()
       if (shipment) {
         setShipmentDate(new Date(shipment.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))
@@ -154,6 +186,9 @@ export default function ShipmentScanPage() {
       if (logs) {
         setScanLogs(logs)
         const myLogs = logs.filter(l => l.scanned_by === (roleData?.role ?? 'maryland'))
+        const maxBox = Math.max(1, ...myLogs.map(l => l.box_number ?? 1))
+        setCurrentBox(maxBox)
+        currentBoxRef.current = maxBox
         if (myLogs.length > 0) {
           const last = myLogs[myLogs.length - 1]
           setLastEntry({ itemNumber: last.item_number, quantity: last.quantity, logId: last.id })
@@ -180,12 +215,12 @@ export default function ShipmentScanPage() {
 
   const logPair = useCallback(async (partNumber: string, quantity: number) => {
     const manifestItem = manifestItemsRef.current.find(m => m.item_number === partNumber)
-    const { data: inserted, error } = await supabase.from('scan_logs').insert({ shipment_id: shipmentId, item_number: partNumber, quantity, scanned_by: userRole }).select().single()
+    const { data: inserted, error } = await supabase.from('scan_logs').insert({ shipment_id: shipmentId, item_number: partNumber, quantity, scanned_by: userRole, box_number: currentBoxRef.current }).select().single()
     if (error || !inserted) { triggerError(); return }
     setScanLogs(prev => {
       const next = [...prev, inserted]
       const total = next.filter(l => l.item_number === partNumber && l.scanned_by === userRole).reduce((sum, l) => sum + l.quantity, 0)
-      setConfirmCard({ itemNumber: partNumber, description: manifestItem?.description ?? null, quantityScanned: quantity, runningTotal: total, expected: manifestItem?.expected_quantity ?? null, logId: inserted.id })
+      setConfirmCard({ itemNumber: partNumber, description: manifestItem?.description ?? null, quantityScanned: quantity, runningTotal: total, expected: manifestItem?.expected_quantity ?? null, logId: inserted.id, locations: locationsRef.current.get(partNumber) ?? [] })
       setLastEntry({ itemNumber: partNumber, quantity, logId: inserted.id })
       return next
     })
@@ -211,7 +246,8 @@ export default function ShipmentScanPage() {
         const onManifest = manifestItemsRef.current.some(m => m.item_number === trimmed)
         const description = manifestItemsRef.current.find(m => m.item_number === trimmed)?.description ?? null
         setScanState({ phase: 'hasPart', partNumber: trimmed })
-        setStatusDisplay({ kind: 'hasPart', partNumber: trimmed, onManifest, description })
+        const locations = locationsRef.current.get(trimmed) ?? []
+        setStatusDisplay({ kind: 'hasPart', partNumber: trimmed, onManifest, description, locations })
       } else {
         setScanState({ phase: 'hasQty', quantity: Number(trimmed) })
         setStatusDisplay({ kind: 'hasQty', quantity: Number(trimmed) })
@@ -272,6 +308,19 @@ export default function ShipmentScanPage() {
     focusInput()
   }, [lastEntry, userRole, supabase, focusInput])
 
+  const printBoxSheet = useCallback((box: number, advance: boolean) => {
+    setPrintBox(box)
+    setTimeout(() => {
+      window.print()
+      if (advance) {
+        setCurrentBox(box + 1)
+        currentBoxRef.current = box + 1
+      }
+      setPrintBox(null)
+      focusInput()
+    }, 150)
+  }, [focusInput])
+
   const handleSubmit = useCallback(async () => {
     setIsSubmitting(true)
     const isSC = userRole === 'southcarolina'
@@ -298,6 +347,17 @@ export default function ShipmentScanPage() {
   const completedItems = grouped.complete.length
   const totalItems = manifestItems.length
   const dashboardPath = isSC ? '/dashboard/southcarolina' : '/dashboard/maryland'
+  function boxLines(box: number) {
+    const map = new Map<string, { item_number: string; description: string; quantity: number }>()
+    for (const l of myLogs.filter(l => (l.box_number ?? 1) === box)) {
+      const desc = manifestItems.find(m => m.item_number === l.item_number)?.description ?? ''
+      const cur = map.get(l.item_number)
+      if (cur) cur.quantity += l.quantity
+      else map.set(l.item_number, { item_number: l.item_number, description: desc, quantity: l.quantity })
+    }
+    return Array.from(map.values())
+  }
+  const currentBoxHasScans = boxLines(currentBox).length > 0
 
   function renderStatusDisplay() {
     switch (statusDisplay.kind) {
@@ -315,6 +375,20 @@ export default function ShipmentScanPage() {
             <div style={{ fontSize: 28, fontFamily: syne, fontWeight: 700, color: '#1A1A1A', marginBottom: 4 }}>{statusDisplay.partNumber}</div>
             {statusDisplay.description && <div style={{ fontSize: 13, color: '#888', fontFamily: mono, marginBottom: 4 }}>{statusDisplay.description}</div>}
             {!statusDisplay.onManifest && <div style={{ fontSize: 12, color: '#B81A1A', fontFamily: mono }}>⚠ Not on manifest</div>}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: '#A0A0A0', fontFamily: mono, letterSpacing: '0.1em', marginBottom: 6 }}>
+                {statusDisplay.locations.length > 1 ? `BINS (${statusDisplay.locations.length})` : 'BIN'}
+              </div>
+              {statusDisplay.locations.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {statusDisplay.locations.map(loc => (
+                    <span key={loc} style={{ padding: '6px 12px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 6, color: '#1E4D8C', fontFamily: mono, fontWeight: 600, fontSize: 15 }}>{loc}</span>
+                  ))}
+                </div>
+              ) : (
+                <span style={{ padding: '6px 12px', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, color: '#B81A1A', fontFamily: mono, fontSize: 13 }}>No location</span>
+              )}
+            </div>
             <div style={{ fontSize: 12, color: '#0057B8', fontFamily: mono, marginTop: 6 }}>→ Now scan quantity barcode</div>
           </div>
         )
@@ -351,7 +425,7 @@ export default function ShipmentScanPage() {
 
   function renderConfirmCard() {
     if (!confirmCard) return null
-    const { itemNumber, description, quantityScanned, runningTotal, expected } = confirmCard
+    const { itemNumber, description, quantityScanned, runningTotal, expected, locations } = confirmCard
     const isComplete = expected !== null && runningTotal === expected
     const isOver = expected !== null && runningTotal > expected
     const overBy = isOver ? runningTotal - (expected ?? 0) : 0
@@ -363,6 +437,9 @@ export default function ShipmentScanPage() {
           <div style={{ fontFamily: syne, fontWeight: 700, fontSize: 16, color: '#1A1A1A', marginBottom: 4 }}>
             {itemNumber}
             {description && <span style={{ fontFamily: mono, fontWeight: 400, fontSize: 12, color: '#888', marginLeft: 10 }}>{description}</span>}
+          </div>
+          <div style={{ fontFamily: mono, fontSize: 12, color: '#1E4D8C', marginBottom: 4 }}>
+            {locations.length > 0 ? <>Bins: <strong>{locations.join(' · ')}</strong></> : <span style={{ color: '#B81A1A' }}>No location</span>}
           </div>
           <div style={{ fontFamily: mono, fontSize: 12, color: '#555', marginBottom: 4 }}>
             Scanned: <strong>{quantityScanned}</strong> · Total: <strong>{runningTotal}</strong>{expected !== null && <span style={{ color: '#A0A0A0' }}> of {expected}</span>}
@@ -468,8 +545,17 @@ export default function ShipmentScanPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F5F5F3', fontFamily: mono }}>
-      <style>{`@keyframes slideIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } } * { box-sizing:border-box; }`}</style>
+    <div className="scan-root" style={{ minHeight: '100vh', background: '#F5F5F3', fontFamily: mono }}>
+      <style>{`
+      @keyframes slideIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+      * { box-sizing:border-box; }
+      .print-sheet { display: none; }
+      @media print {
+        .scan-root { background: #fff !important; min-height: 0 !important; }
+        .scan-root > *:not(.print-sheet) { display: none !important; }
+        .print-sheet { display: block !important; padding: 24px; font-family: Arial, sans-serif; color: #000; }
+      }
+    `}</style>
 
       {!isReadOnly && (
         <input ref={inputRef} onKeyDown={onInputKeyDown} style={{ position: 'fixed', top: 0, left: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} autoFocus autoComplete="off" tabIndex={-1} />
@@ -525,13 +611,38 @@ export default function ShipmentScanPage() {
 
             {confirmCard && <div style={{ animation: 'slideIn 0.2s ease' }}>{renderConfirmCard()}</div>}
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, padding: '10px 16px', background: '#fff', border: '1px solid #E2E2DC', borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 24, padding: '10px 16px', background: '#fff', border: '1px solid #E2E2DC', borderRadius: 8 }}>
               <div style={{ fontFamily: mono, fontSize: 12, color: '#888' }}>
                 {lastEntry ? <>Last scan: <span style={{ color: '#1A1A1A', fontWeight: 600 }}>{lastEntry.itemNumber}</span> × <span style={{ color: '#1A1A1A', fontWeight: 600 }}>{lastEntry.quantity}</span></> : 'No scans yet'}
               </div>
-              <button onClick={undoLast} disabled={!lastEntry} style={{ background: lastEntry ? '#F5F5F3' : 'transparent', border: `1px solid ${lastEntry ? '#E2E2DC' : '#F0F0EC'}`, color: lastEntry ? '#555' : '#C0C0BA', padding: '6px 14px', borderRadius: 6, cursor: lastEntry ? 'pointer' : 'default', fontFamily: mono, fontSize: 11 }}>
-                Undo last entry
-              </button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button onClick={undoLast} disabled={!lastEntry} style={{ background: lastEntry ? '#F5F5F3' : 'transparent', border: `1px solid ${lastEntry ? '#E2E2DC' : '#F0F0EC'}`, color: lastEntry ? '#555' : '#C0C0BA', padding: '6px 14px', borderRadius: 6, cursor: lastEntry ? 'pointer' : 'default', fontFamily: mono, fontSize: 11 }}>
+                  Undo last entry
+                </button>
+                {!isSC && currentBox > 1 && (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: mono, fontSize: 11, color: '#A0A0A0' }}>Reprint:</span>
+                    {Array.from({ length: currentBox - 1 }, (_, i) => i + 1).map(n => (
+                      <button
+                        key={n}
+                        onClick={() => printBoxSheet(n, false)}
+                        style={{ background: '#F5F5F3', border: '1px solid #E2E2DC', color: '#555', padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: mono, fontSize: 11 }}
+                      >
+                        Box {n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!isSC && (
+                  <button
+                    onClick={() => printBoxSheet(currentBox, true)}
+                    disabled={!currentBoxHasScans}
+                    style={{ background: currentBoxHasScans ? '#EFF6FF' : 'transparent', border: `1px solid ${currentBoxHasScans ? '#BFDBFE' : '#F0F0EC'}`, color: currentBoxHasScans ? '#1E4D8C' : '#C0C0BA', padding: '6px 14px', borderRadius: 6, cursor: currentBoxHasScans ? 'pointer' : 'default', fontFamily: syne, fontWeight: 700, fontSize: 12 }}
+                  >
+                    Close Box {currentBox} &amp; Print
+                  </button>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -559,6 +670,39 @@ export default function ShipmentScanPage() {
           </table>
         </div>
       </div>
+
+      {printBox !== null && (
+        <div className="print-sheet">
+          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 16 }}>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>BOX {printBox}</div>
+            <div style={{ textAlign: 'right', fontSize: 12 }}>
+              Shipment: {shipmentDate}<br />Printed: {new Date().toLocaleString()}
+            </div>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #000' }}>
+                <th style={{ padding: 6 }}>Item No.</th>
+                <th style={{ padding: 6 }}>Description</th>
+                <th style={{ padding: 6, textAlign: 'right' }}>Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {boxLines(printBox).map(l => (
+                <tr key={l.item_number} style={{ borderBottom: '1px solid #ccc' }}>
+                  <td style={{ padding: 6, fontWeight: 600 }}>{l.item_number}</td>
+                  <td style={{ padding: 6 }}>{l.description}</td>
+                  <td style={{ padding: 6, textAlign: 'right' }}>{l.quantity}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 16, fontWeight: 700, textAlign: 'right' }}>
+            {boxLines(printBox).length} line items · {boxLines(printBox).reduce((s, l) => s + l.quantity, 0)} pieces
+          </div>
+          <div style={{ marginTop: 40, fontSize: 12 }}>Packed by: ____________________</div>
+        </div>
+      )}
     </div>
   )
 }

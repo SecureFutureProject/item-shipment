@@ -31,10 +31,10 @@ function hoursRemaining(submittedAt: string): number {
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string; bg: string; border: string }> = {
-    active:    { label: 'Active',       color: '#92661A', bg: '#FEF3C7', border: '#FDE68A' },
-    submitted: { label: 'Awaiting SC',  color: '#1E4D8C', bg: '#EFF6FF', border: '#BFDBFE' },
-    received:  { label: 'Received',     color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
-    cancelled: { label: 'Cancelled',    color: '#6B6B6B', bg: '#F3F4F6', border: '#E5E7EB' },
+    active: { label: 'Active', color: '#92661A', bg: '#FEF3C7', border: '#FDE68A' },
+    submitted: { label: 'Awaiting SC', color: '#1E4D8C', bg: '#EFF6FF', border: '#BFDBFE' },
+    received: { label: 'Received', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
+    cancelled: { label: 'Cancelled', color: '#6B6B6B', bg: '#F3F4F6', border: '#E5E7EB' },
   }
   const s = map[status] ?? map.cancelled
   return (
@@ -189,7 +189,10 @@ export default function MarylandDashboard() {
             <h1 style={{ fontFamily: syne, fontWeight: 700, fontSize: 28, color: '#1A1A1A', margin: 0 }}>Maryland</h1>
             <p style={{ color: '#888', fontSize: 13, marginTop: 4, fontFamily: mono }}>Sender dashboard</p>
           </div>
-          <button onClick={() => router.push('/shipment/new')} style={{ background: '#0057B8', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: 8, fontFamily: syne, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>+ New Shipment</button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={() => router.push('/locations')} style={{ background: '#fff', color: '#555', border: '1px solid #E2E2DC', padding: '12px 20px', borderRadius: 8, fontFamily: syne, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>Part Locations</button>
+            <button onClick={() => router.push('/shipment/new')} style={{ background: '#0057B8', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: 8, fontFamily: syne, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>+ New Shipment</button>
+          </div>
         </div>
 
         {!loading && shipments.length > 0 && (

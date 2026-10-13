@@ -22,7 +22,7 @@ function formatDate(ts: string) {
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string; bg: string; border: string }> = {
     submitted: { label: 'Incoming', color: '#1E4D8C', bg: '#EFF6FF', border: '#BFDBFE' },
-    received:  { label: 'Received', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
+    received: { label: 'Received', color: '#166534', bg: '#F0FDF4', border: '#BBF7D0' },
   }
   const s = map[status] ?? map.received
   return (
@@ -102,9 +102,12 @@ export default function SouthCarolinaDashboard() {
       </div>
 
       <div style={{ maxWidth: 860, margin: '0 auto', padding: '40px 24px 80px' }}>
-        <div style={{ marginBottom: 32 }}>
-          <h1 style={{ fontFamily: syne, fontWeight: 700, fontSize: 28, color: '#1A1A1A', margin: 0 }}>South Carolina</h1>
-          <p style={{ color: '#888', fontSize: 13, marginTop: 4, fontFamily: mono }}>Receiver dashboard</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 32 }}>
+          <div>
+            <h1 style={{ fontFamily: syne, fontWeight: 700, fontSize: 28, color: '#1A1A1A', margin: 0 }}>South Carolina</h1>
+            <p style={{ color: '#888', fontSize: 13, marginTop: 4, fontFamily: mono }}>Receiver dashboard</p>
+          </div>
+          <button onClick={() => router.push('/locations')} style={{ background: '#fff', color: '#555', border: '1px solid #E2E2DC', padding: '12px 20px', borderRadius: 8, fontFamily: syne, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>Part Locations</button>
         </div>
 
         {!loading && shipments.length > 0 && (
